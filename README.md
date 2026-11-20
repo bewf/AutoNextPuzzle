@@ -4,6 +4,7 @@
 
 <p align="center">
   <a href="https://chromewebstore.google.com/detail/kkjonhiflkkmdngelljdijddhcnnnelf"><img src="https://img.shields.io/badge/Chrome-Web%20Store-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Get it on the Chrome Web Store"></a>
+  <a href="https://addons.mozilla.org/firefox/addon/auto-next-puzzle/"><img src="https://img.shields.io/badge/Firefox-Add--ons-FF7139?style=for-the-badge&logo=firefox&logoColor=white" alt="Get it on Firefox Add-ons"></a>
 </p>
 
 ## What does this do?
@@ -28,7 +29,7 @@ You can toggle **Auto Next** and **Auto Retry** right above the Hint button on C
 
 ## Install
 
-- **Chrome / Brave:** [Chrome Web Store](https://chromewebstore.google.com/detail/kkjonhiflkkmdngelljdijddhcnnnelf) (or install manually using the [Chromium branch](https://github.com/bewf/AutoNextPuzzle/tree/chromium): download, extract, enable Developer mode at `chrome://extensions` or `brave://extensions`, and select **Load unpacked**).
+- **Chrome / Brave:** [Chrome Web Store](https://chromewebstore.google.com/detail/kkjonhiflkkmdngelljdijddhcnnnelf) (or install manually using the [Chromium branch](https://github.com/bewf/AutoNextPuzzle/tree/chromium) via `chrome://extensions` or `brave://extensions`).
 - **Firefox:** [Firefox Add-ons](https://addons.mozilla.org/firefox/addon/auto-next-puzzle/) (or install manually using the [Mozilla branch](https://github.com/bewf/AutoNextPuzzle/tree/mozilla) via `about:debugging#/runtime/this-firefox`).
 
 ## Credits
