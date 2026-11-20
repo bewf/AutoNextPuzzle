@@ -1,522 +1,455 @@
-// Chess.com Auto-Next Content Script
-(function() {
-  // Only run on puzzle pages
+(() => {
   const allowedPaths = ['/puzzles', '/puzzles/rated'];
   const currentPath = window.location.pathname;
-  if (!allowedPaths.some(path => currentPath === path || currentPath.startsWith(path + '/'))) {
-    return; // Exit if not on a puzzle page
+
+  if (!allowedPaths.some(path => currentPath === path || currentPath.startsWith(`${path}/`))) {
+    return;
   }
 
-  let settings = { enabled: true, delay: 5 };
-  let hasClicked = false;
-  let toggleButton = null;
+  const defaults = {
+    autoNext: true,
+    autoRetry: true,
+    autoNextDelay: 50,
+    autoRetryDelay: 150
+  };
 
-  // Load settings from storage
-  chrome.storage.sync.get(['enabled', 'delay'], (result) => {
-    settings.enabled = result.enabled !== undefined ? result.enabled : true;
-    settings.delay = result.delay !== undefined ? result.delay : 5;
-    // Don't call updateToggleButton here - toggle doesn't exist yet
+  const settings = { ...defaults };
+  let settingsLoaded = false;
+  let lastClickedButton = null;
+  let pendingAction = null;
+  let pendingTimer = null;
+  let footerControls = null;
+  let scheduledCheck = null;
+
+  document.getElementById('chess-auto-next-toggle')?.remove();
+  document.getElementById('anp-header-controls')?.remove();
+  document.getElementById('anp-header-styles')?.remove();
+
+  extensionStorage.get(['autoNext', 'enabled', 'autoRetry', 'autoNextDelay', 'autoRetryDelay'], result => {
+    settings.autoNext = typeof result.autoNext === 'boolean'
+      ? result.autoNext
+      : typeof result.enabled === 'boolean'
+        ? result.enabled
+        : defaults.autoNext;
+    settings.autoRetry = typeof result.autoRetry === 'boolean'
+      ? result.autoRetry
+      : defaults.autoRetry;
+    settings.autoNextDelay = normalizeDelay(result.autoNextDelay, defaults.autoNextDelay);
+    settings.autoRetryDelay = normalizeDelay(result.autoRetryDelay, defaults.autoRetryDelay);
+    settingsLoaded = true;
+    injectFooterControls();
+    updateFooterControls();
+    handlePuzzleAction();
   });
 
-  // Listen for settings changes
-  chrome.storage.onChanged.addListener((changes) => {
-    if (changes.enabled) settings.enabled = changes.enabled.newValue;
-    if (changes.delay) settings.delay = changes.delay.newValue;
-    updateToggleState(); // Use updateToggleState directly since toggle should exist by now
+  extensionStorage.onChanged.addListener(changes => {
+    if (changes.autoNext) settings.autoNext = changes.autoNext.newValue === true;
+    else if (changes.enabled) settings.autoNext = changes.enabled.newValue !== false;
+    if (changes.autoRetry) settings.autoRetry = changes.autoRetry.newValue === true;
+    if (changes.autoNextDelay) settings.autoNextDelay = normalizeDelay(changes.autoNextDelay.newValue, defaults.autoNextDelay);
+    if (changes.autoRetryDelay) settings.autoRetryDelay = normalizeDelay(changes.autoRetryDelay.newValue, defaults.autoRetryDelay);
+    updateFooterControls();
+    handlePuzzleAction();
   });
 
-  // Create toggle next to settings icon in bottom right
-  let layoutObserver = null;
-  let positionUpdateTimeout = null;
-  let resizeHandler = null;
-  let scrollHandler = null;
-
-  function normalizeText(value) {
-    return (value || '')
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .toLowerCase()
-      .trim();
+  function normalizeDelay(value, fallback) {
+    return Number.isInteger(value) && value >= 0 && value <= 10000 ? value : fallback;
   }
 
-  function isReadyToClick(element) {
-    if (!element) return false;
-    if (element.offsetParent === null) return false;
-    if (element.disabled) return false;
-    if (element.getAttribute('aria-disabled') === 'true') return false;
-    const className = normalizeText(element.className || '');
-    if (className.includes('disabled')) return false;
-    const computed = window.getComputedStyle(element);
-    if (computed.pointerEvents === 'none') return false;
-    if (computed.visibility === 'hidden') return false;
-    return true;
-  }
-  
-  function injectToggleIntoSettings() {
-    if (document.getElementById('chess-auto-next-toggle')) return;
+  function addStyles() {
+    if (document.getElementById('anp-footer-styles')) return;
 
-    // Find the Next Move button with multiple selector strategies
-    let nextMoveBtn = null;
-    
-    // Try multiple selectors in order of preference
-    const selectors = [
-      'button[aria-label="Next Move"]',
-      'button[data-cy="next-move-arrow"]',
-      'button[aria-label*="Next"]',
-      'button[title*="Next"]',
-      'button[aria-label*="Próximo lance"]',
-      'button[aria-label*="Proximo lance"]',
-      'button[aria-label*="Próximo"]',
-      'button[aria-label*="Proximo"]',
-      'button[title*="Próximo lance"]',
-      'button[title*="Proximo lance"]',
-      'button[title*="Próximo"]',
-      'button[title*="Proximo"]',
-      // Fallback: look for buttons with "next" in text (case-insensitive)
-      () => {
-        const buttons = document.querySelectorAll('button');
-        return Array.from(buttons).find(btn => {
-          const text = normalizeText(btn.textContent);
-          const ariaLabel = normalizeText(btn.getAttribute('aria-label'));
-          return (
-            text.includes('next move') ||
-            ariaLabel.includes('next move') ||
-            text.includes('proximo lance') ||
-            ariaLabel.includes('proximo lance')
-          ) && btn.offsetParent !== null;
-        });
+    const style = document.createElement('style');
+    style.id = 'anp-footer-styles';
+    style.textContent = `
+      #anp-footer-controls {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        width: 100%;
+        margin-bottom: 8px;
+        box-sizing: border-box;
       }
-    ];
-    
-    for (const selector of selectors) {
-      try {
-        if (typeof selector === 'function') {
-          nextMoveBtn = selector();
-        } else {
-          nextMoveBtn = document.querySelector(selector);
-        }
-        if (nextMoveBtn && nextMoveBtn.offsetParent !== null) {
+      #anp-footer-controls .anp-fat-button {
+        appearance: none;
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        width: 100%;
+        height: 44px;
+        margin: 0;
+        padding: 0 12px;
+        border: 0;
+        border-radius: 10px;
+        background-color: var(--anp-off-bg, #45423e);
+        background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.11) 0%, rgba(255, 255, 255, 0.01) 48%, rgba(0, 0, 0, 0.12) 100%);
+        color: var(--anp-off-fg, #e7e6e4);
+        box-shadow: 0 3px 0 0 var(--anp-off-lip, #2d2b28), 0 4px 8px rgba(0, 0, 0, 0.24), inset 0 1.5px 0 rgba(255, 255, 255, 0.2);
+        font-family: inherit;
+        font-size: 14px;
+        font-weight: 700;
+        line-height: 1;
+        text-align: center;
+        white-space: nowrap;
+        cursor: pointer;
+        user-select: none;
+        transition: background-color 120ms ease, color 120ms ease, box-shadow 70ms ease, transform 70ms ease, filter 120ms ease;
+      }
+      #anp-footer-controls .anp-fat-button:hover {
+        filter: brightness(1.07);
+      }
+      #anp-footer-controls .anp-fat-button:active {
+        transform: translateY(2px);
+        box-shadow: 0 1px 0 0 var(--anp-off-lip, #2d2b28), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+      }
+      #anp-footer-controls .anp-fat-button.anp-on {
+        background-color: #81b64c;
+        background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.18) 0%, rgba(255, 255, 255, 0.02) 48%, rgba(0, 0, 0, 0.1) 100%);
+        color: #ffffff;
+        box-shadow: 0 3px 0 0 #537a2b, 0 4px 8px rgba(0, 0, 0, 0.24), inset 0 1.5px 0 rgba(255, 255, 255, 0.36);
+      }
+      #anp-footer-controls .anp-fat-button.anp-on:active {
+        transform: translateY(2px);
+        box-shadow: 0 1px 0 0 #537a2b, inset 0 1px 0 rgba(255, 255, 255, 0.16);
+      }
+      #anp-footer-controls .anp-fat-button:focus-visible {
+        outline: 2px solid #81b64c;
+        outline-offset: 2px;
+      }
+      #anp-footer-controls .anp-fat-button svg {
+        width: 22px;
+        height: 22px;
+        flex: 0 0 auto;
+        display: block;
+      }
+      #anp-footer-controls .anp-fat-button .anp-btn-label {
+        display: block;
+        line-height: 1;
+        transform: translateY(-1px);
+      }
+      #anp-footer-controls .anp-tooltip {
+        position: absolute;
+        left: 50%;
+        bottom: calc(100% + 10px);
+        transform: translate(-50%, 4px);
+        width: max-content;
+        max-width: 220px;
+        padding: 7px 12px;
+        border-radius: 6px;
+        background: #0b0b0a;
+        color: #ffffff;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+        font-family: inherit;
+        font-size: 14px;
+        font-weight: 600;
+        line-height: 1.2;
+        white-space: nowrap;
+        opacity: 0;
+        pointer-events: none;
+        z-index: 9999;
+        transition: opacity 100ms ease-out 60ms, transform 100ms ease-out 60ms;
+      }
+      #anp-footer-controls .anp-tooltip::after {
+        content: "";
+        position: absolute;
+        top: 100%;
+        left: 50%;
+        transform: translateX(-50%);
+        border: 6px solid transparent;
+        border-top-color: #0b0b0a;
+        border-bottom: 0;
+      }
+      #anp-footer-controls .anp-fat-button:hover .anp-tooltip,
+      #anp-footer-controls .anp-fat-button:focus-visible .anp-tooltip {
+        opacity: 1;
+        transform: translate(-50%, 0);
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function syncThemeFromSidebar(footer) {
+    if (!footer) return;
+    const sidebar = footer.closest('#sidebar') || document.body;
+    const bg = window.getComputedStyle(sidebar).backgroundColor;
+    const match = bg?.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+    if (match) {
+      const [, r, g, b] = match.map(Number);
+      const isLight = (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.5;
+      footer.style.setProperty('--anp-off-bg', isLight ? '#dbd8d2' : '#45423e');
+      footer.style.setProperty('--anp-off-fg', isLight ? '#312e2b' : '#e7e6e4');
+      footer.style.setProperty('--anp-off-lip', isLight ? '#bab6af' : '#2d2b28');
+    }
+  }
+
+  function createIcon(type) {
+    const svgNS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNS, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('aria-hidden', 'true');
+
+    if (type === 'autoNext') {
+      // Bold Lucide-inspired fast-forward >> matching our brand mark
+      const p1 = document.createElementNS(svgNS, 'path');
+      p1.setAttribute('fill', 'currentColor');
+      p1.setAttribute('d', 'M3 6.2a1.2 1.2 0 0 1 1.98-.91l6.6 5.8a1.2 1.2 0 0 1 0 1.82l-6.6 5.8A1.2 1.2 0 0 1 3 17.8V6.2Z');
+      const p2 = document.createElementNS(svgNS, 'path');
+      p2.setAttribute('fill', 'currentColor');
+      p2.setAttribute('d', 'M12.5 6.2a1.2 1.2 0 0 1 1.98-.91l6.6 5.8a1.2 1.2 0 0 1 0 1.82l-6.6 5.8a1.2 1.2 0 0 1-1.98-.91V6.2Z');
+      svg.append(p1, p2);
+    } else {
+      // Clean Chess.com-style counterclockwise retry arrow sized to match Auto Next
+      const arc = document.createElementNS(svgNS, 'path');
+      arc.setAttribute('fill', 'none');
+      arc.setAttribute('stroke', 'currentColor');
+      arc.setAttribute('stroke-width', '2.8');
+      arc.setAttribute('stroke-linecap', 'round');
+      arc.setAttribute('d', 'M5.4 7.4A8.2 8.2 0 1 1 4.2 14.2');
+      const head = document.createElementNS(svgNS, 'path');
+      head.setAttribute('fill', 'currentColor');
+      head.setAttribute('d', 'M3.2 3.6v5.2a.7.7 0 0 0 .7.7h5.2a.55.55 0 0 0 .39-.94L4.14 3.21a.55.55 0 0 0-.94.39Z');
+      svg.append(arc, head);
+    }
+
+    return svg;
+  }
+
+  function injectFooterControls() {
+    if (!settingsLoaded) return;
+    if (footerControls && footerControls.isConnected) return;
+
+    const footers = document.querySelectorAll('.rated-sidebar-footer-component');
+    if (footers.length === 0) return;
+
+    let footer = footers[0];
+    if (footers.length > 1) {
+      for (const candidate of footers) {
+        if (isVisible(candidate)) {
+          footer = candidate;
           break;
         }
-      } catch (e) {
-        // Continue to next selector
-        continue;
       }
     }
+
+    addStyles();
+    syncThemeFromSidebar(footer);
+
+    const existing = document.getElementById('anp-footer-controls');
+    if (existing && existing.parentElement === footer) {
+      footerControls = existing;
+      updateFooterControls();
+      return;
+    }
+    if (existing) existing.remove();
+
+    const container = document.createElement('div');
+    container.id = 'anp-footer-controls';
+    container.setAttribute('role', 'group');
+    container.setAttribute('aria-label', 'Automatic puzzle controls');
+
+    const nextButton = createFooterButton('autoNext', 'Auto Next');
+    const retryButton = createFooterButton('autoRetry', 'Auto Retry');
+
+    nextButton.addEventListener('click', () => toggleSetting('autoNext'));
+    retryButton.addEventListener('click', () => toggleSetting('autoRetry'));
+    container.append(nextButton, retryButton);
+
+    const primaryRow = footer.querySelector('.primary-control-buttons-component');
+    if (primaryRow) {
+      footer.insertBefore(container, primaryRow);
+    } else {
+      footer.prepend(container);
+    }
+
+    footerControls = container;
+    updateFooterControls();
+  }
+
+  function createFooterButton(key, label) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'anp-fat-button';
+    button.dataset.setting = key;
+    button.setAttribute('aria-label', `Toggle ${label}`);
+    button.setAttribute('aria-pressed', 'false');
     
-    if (!nextMoveBtn || !nextMoveBtn.offsetParent) {
-      console.log('Chess Auto-Next: Next Move button not found, retrying in 500ms...');
-      setTimeout(injectToggleIntoSettings, 500);
-      return;
+
+    const icon = createIcon(key);
+    const text = document.createElement('span');
+    text.className = 'anp-btn-label';
+    text.textContent = label;
+
+    const tooltip = document.createElement('span');
+    tooltip.className = 'anp-tooltip';
+    tooltip.setAttribute('aria-hidden', 'true');
+    tooltip.textContent = `Disable ${label}`;
+
+    button.append(icon, text, tooltip);
+    return button;
+  }
+
+  function toggleSetting(key) {
+    settings[key] = !settings[key];
+    updateFooterControls();
+    extensionStorage.set({ [key]: settings[key] });
+    handlePuzzleAction();
+  }
+
+  function updateFooterControls() {
+    if (!footerControls || !footerControls.isConnected) return;
+
+    for (const button of footerControls.querySelectorAll('button[data-setting]')) {
+      const key = button.dataset.setting;
+      const enabled = settings[key] === true;
+      const label = key === 'autoNext' ? 'Auto Next' : 'Auto Retry';
+      button.classList.toggle('anp-on', enabled);
+      button.setAttribute('aria-pressed', String(enabled));
+      const tip = button.querySelector('.anp-tooltip');
+      if (tip) tip.textContent = `${enabled ? 'Disable' : 'Enable'} ${label}`;
     }
+  }
 
-    console.log('Chess Auto-Next: Found Next Move button', nextMoveBtn);
+  function isVisible(element) {
+    return Boolean(element && element.isConnected && element.getClientRects().length > 0);
+  }
 
-    // Create container row with Flexbox
-    const toggleContainer = document.createElement('div');
-    toggleContainer.id = 'chess-auto-next-toggle';
-    
-    toggleContainer.style.cssText = `
-      position: fixed;
-      display: flex;
-      flex-direction: row;
-      align-items: center;
-      gap: 8px;
-      z-index: 10000;
-      background: transparent;
-      pointer-events: auto;
-    `;
+  function isActionable(button) {
+    return isVisible(button) && !button.disabled && button.getAttribute('data-disabled') !== 'true' && button.getAttribute('data-loading') !== 'true';
+  }
 
-    toggleContainer.innerHTML = `
-      <span style="font-size: 12px; color: #666; white-space: nowrap; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;">Auto-Next</span>
-      <label class="toggle-container" style="position: relative; display: inline-block; width: 40px; height: 22px; cursor: pointer; flex-shrink: 0;">
-        <input type="checkbox" ${settings.enabled ? 'checked' : ''} style="opacity: 0; width: 0; height: 0; position: absolute;">
-        <span class="toggle-slider" style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; background-color: ${settings.enabled ? '#81b64c' : '#ccc'}; border-radius: 22px; transition: background-color 0.3s;">
-          <span class="toggle-circle" style="position: absolute; height: 18px; width: 18px; left: 2px; bottom: 2px; background-color: white; border-radius: 50%; transition: transform 0.3s; transform: translateX(${settings.enabled ? '18px' : '0'}); box-shadow: 0 1px 3px rgba(0,0,0,0.3);"></span>
-        </span>
-      </label>
-    `;
+  function getPuzzleControls() {
+    const panels = document.querySelectorAll('.rated-sidebar-footer-component .primary-control-buttons-component');
+    if (panels.length === 0) return null;
 
-    const checkbox = toggleContainer.querySelector('input[type="checkbox"]');
-    if (checkbox) {
-      checkbox.addEventListener('change', (e) => {
-        settings.enabled = e.target.checked;
-        chrome.storage.sync.set({ enabled: settings.enabled }, () => {
-          updateToggleState();
-        });
-      });
-    }
-
-    // Ensure document.body exists before appending
-    if (!document.body) {
-      console.warn('Chess Auto-Next: document.body not available, waiting...');
-      setTimeout(injectToggleIntoSettings, 500);
-      return;
-    }
-
-    try {
-      document.body.appendChild(toggleContainer);
-      toggleButton = toggleContainer;
-    } catch (e) {
-      console.error('Chess Auto-Next: Failed to append toggle container', e);
-      return;
-    }
-
-    // Helper function to find Next Move button (reuse same logic as injection)
-    const findNextMoveButton = () => {
-      const selectors = [
-        'button[aria-label="Next Move"]',
-        'button[data-cy="next-move-arrow"]',
-        'button[aria-label*="Next Move"]',
-        'button[aria-label*="Next"]',
-        'button[aria-label*="Próximo lance"]',
-        'button[aria-label*="Proximo lance"]',
-        'button[aria-label*="Próximo"]',
-        'button[aria-label*="Proximo"]'
-      ];
-      
-      for (const selector of selectors) {
-        try {
-          const btn = document.querySelector(selector);
-          if (btn && btn.offsetParent !== null) {
-            return btn;
-          }
-        } catch (e) {
-          continue;
+    let panel = panels[0];
+    if (panels.length > 1) {
+      for (const candidate of panels) {
+        if (isVisible(candidate)) {
+          panel = candidate;
+          break;
         }
+      }
+    }
+
+    const buttons = Array.from(panel.querySelectorAll('button'));
+    const byLabel = label => buttons.find(button => (button.getAttribute('aria-label') || '').trim().toLowerCase() === label.toLowerCase()) || null;
+
+    return {
+      retry: byLabel('Retry'),
+      next: byLabel('Next Puzzle') || byLabel('Next'),
+      showSolution: byLabel('Show Solution')
+    };
+  }
+
+  function getPuzzleState() {
+    const controls = getPuzzleControls();
+    if (!controls) return { type: 'playing', controls: null };
+
+    const failed = Boolean(
+      controls.retry && controls.retry.getAttribute('data-variant') === 'danger'
+    ) || Boolean(controls.showSolution);
+
+    const successful = Boolean(
+      controls.next && controls.next.getAttribute('data-variant') === 'primary' && !failed
+    );
+
+    if (failed) return { type: 'failed', controls };
+    if (successful) return { type: 'success', controls };
+    return { type: 'playing', controls };
+  }
+
+  function chooseAction(state) {
+    if (!state.controls) return null;
+
+    if (state.type === 'failed') {
+      if (settings.autoRetry) {
+        return isActionable(state.controls.retry)
+          ? { type: 'retry', button: state.controls.retry, delay: settings.autoRetryDelay }
+          : null;
+      }
+      if (settings.autoNext && isActionable(state.controls.next)) {
+        return { type: 'next', button: state.controls.next, delay: settings.autoNextDelay };
       }
       return null;
-    };
+    }
 
-    // Update position on window resize and scroll
-    const updatePosition = () => {
-      try {
-        const targetBtn = findNextMoveButton();
-        
-        if (!toggleContainer || !targetBtn) {
-          return; // Silently return if button not found or toggle not initialized
-        }
-        
-        const newRect = targetBtn.getBoundingClientRect();
-        const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
-        const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
-        
-        // Validate viewport dimensions
-        if (viewportWidth <= 0 || viewportHeight <= 0) {
-          return;
-        }
-        
-        // Remove right and bottom to avoid conflicts
-        toggleContainer.style.right = 'auto';
-        toggleContainer.style.bottom = 'auto';
-        
-        // Calculate desired position (140px to the left, 6px lower)
-        let desiredLeft = newRect.left - 140;
-        let desiredTop = newRect.top + 6;
-        
-        // Get toggle container dimensions (with fallback estimates)
-        const toggleRect = toggleContainer.getBoundingClientRect();
-        const toggleWidth = toggleRect.width || 120; // Approximate width: "Auto-Next" text + toggle
-        const toggleHeight = toggleRect.height || 22;
-        
-        // Bounds checking: ensure toggle stays within viewport
-        // Minimum left position (with some padding)
-        const minLeft = 10;
-        // Maximum left position (toggle shouldn't go off right edge)
-        const maxLeft = Math.max(minLeft, viewportWidth - toggleWidth - 10);
-        // Minimum top position
-        const minTop = 10;
-        // Maximum top position
-        const maxTop = Math.max(minTop, viewportHeight - toggleHeight - 10);
-        
-        // Clamp the position to viewport bounds
-        desiredLeft = Math.max(minLeft, Math.min(desiredLeft, maxLeft));
-        desiredTop = Math.max(minTop, Math.min(desiredTop, maxTop));
-        
-        // Apply the position
-        toggleContainer.style.left = `${desiredLeft}px`;
-        toggleContainer.style.top = `${desiredTop}px`;
-      } catch (e) {
-        console.error('Chess Auto-Next: Error updating toggle position', e);
+    if (state.type === 'success' && settings.autoNext && isActionable(state.controls.next)) {
+      return { type: 'next', button: state.controls.next, delay: settings.autoNextDelay };
+    }
+
+    return null;
+  }
+
+  function cancelPendingAction() {
+    if (pendingTimer !== null) window.clearTimeout(pendingTimer);
+    pendingTimer = null;
+    pendingAction = null;
+  }
+
+  function handlePuzzleAction() {
+    if (!settingsLoaded) return;
+
+    const state = getPuzzleState();
+    if (state.type === 'playing') {
+      lastClickedButton = null;
+      cancelPendingAction();
+      return;
+    }
+
+    const action = chooseAction(state);
+    if (!action || action.button === lastClickedButton) {
+      if (!action) cancelPendingAction();
+      return;
+    }
+
+    if (pendingAction && pendingAction.button === action.button && pendingAction.type === action.type && pendingAction.delay === action.delay) return;
+    cancelPendingAction();
+    pendingAction = action;
+
+    pendingTimer = window.setTimeout(() => {
+      pendingTimer = null;
+      const currentState = getPuzzleState();
+      const currentAction = chooseAction(currentState);
+
+      if (!currentAction || currentAction.button !== action.button || currentAction.type !== action.type || !isActionable(action.button)) {
+        pendingAction = null;
+        handlePuzzleAction();
+        return;
       }
-    };
-    
-    // Set initial position with a small delay to ensure layout is settled
-    setTimeout(() => {
-      updatePosition();
-      // Also update after a brief delay to catch any late layout changes
-      setTimeout(updatePosition, 100);
-    }, 100);
-    
-    // Clean up any existing observers/listeners before creating new ones
-    if (layoutObserver) {
-      layoutObserver.disconnect();
-    }
-    if (resizeHandler) {
-      window.removeEventListener('resize', resizeHandler);
-    }
-    if (scrollHandler) {
-      window.removeEventListener('scroll', scrollHandler, true);
-    }
-    if (positionUpdateTimeout) {
-      clearTimeout(positionUpdateTimeout);
-    }
-    
-    // Debounce resize/scroll events for better performance
-    const debouncedUpdatePosition = () => {
-      if (positionUpdateTimeout) {
-        clearTimeout(positionUpdateTimeout);
-      }
-      positionUpdateTimeout = setTimeout(updatePosition, 50);
-    };
-    
-    resizeHandler = debouncedUpdatePosition;
-    scrollHandler = debouncedUpdatePosition;
-    window.addEventListener('resize', resizeHandler);
-    window.addEventListener('scroll', scrollHandler, true);
-    
-    // Also watch for layout changes that might affect button position
-    layoutObserver = new MutationObserver(debouncedUpdatePosition);
-    layoutObserver.observe(document.body, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ['style', 'class']
+
+      action.button.click();
+      lastClickedButton = action.button;
+      pendingAction = null;
+    }, action.delay);
+  }
+
+  function scheduleCheck() {
+    if (scheduledCheck !== null) return;
+    scheduledCheck = window.requestAnimationFrame(() => {
+      scheduledCheck = null;
+      injectFooterControls();
+      handlePuzzleAction();
     });
   }
 
-  // Update toggle state
-  function updateToggleState() {
-    if (!toggleButton) return;
-    const checkbox = toggleButton.querySelector('input[type="checkbox"]');
-    const slider = toggleButton.querySelector('.toggle-slider');
-    const sliderCircle = toggleButton.querySelector('.toggle-circle');
-    
-    if (checkbox) checkbox.checked = settings.enabled;
-    if (slider) {
-      slider.style.backgroundColor = settings.enabled ? '#81b64c' : '#ccc';
-    }
-    if (sliderCircle) {
-      sliderCircle.style.transform = `translateX(${settings.enabled ? '18px' : '0'})`;
-    }
-  }
-
-  // Update toggle button appearance (legacy function name)
-  function updateToggleButton() {
-    updateToggleState();
-  }
-
-  function findClickableNextButton() {
-    const selectors = [
-      'button[data-cy="next-move-arrow"]',
-      'button[aria-label="Next"]',
-      'button[aria-label="Continue"]',
-      'button[aria-label*="Próximo"]',
-      'button[aria-label*="Proximo"]',
-      'button[aria-label*="Continuar"]',
-      'button[aria-label*="Seguinte"]',
-      'a[aria-label="Next"]',
-      'a[aria-label="Continue"]',
-      '.puzzle-next-button',
-      '[data-cy="next-puzzle"]'
-    ];
-
-    for (const selector of selectors) {
-      try {
-        const candidate = document.querySelector(selector);
-        if (isReadyToClick(candidate)) {
-          return candidate;
-        }
-      } catch (e) {
-        // Ignore invalid selector results
-      }
-    }
-
-    const buttons = document.querySelectorAll('button, a[role="button"], a.button');
-    return Array.from(buttons).find(btn => {
-      if (!isReadyToClick(btn)) return false;
-
-      const text = normalizeText(btn.textContent);
-      const ariaLabel = normalizeText(btn.getAttribute('aria-label'));
-      const className = normalizeText(btn.className);
-
-      const hasNext =
-        text.includes('next') ||
-        ariaLabel.includes('next') ||
-        text.includes('proximo') ||
-        ariaLabel.includes('proximo') ||
-        text.includes('seguinte') ||
-        ariaLabel.includes('seguinte');
-      const hasContinue = (text.includes('continue') && !text.includes('continue solving')) ||
-                         (ariaLabel.includes('continue') && !ariaLabel.includes('continue solving')) ||
-                         text.includes('continuar') ||
-                         ariaLabel.includes('continuar');
-      const hasNextClass = className.includes('next');
-
-      return (hasNext || hasContinue || hasNextClass);
-    }) || null;
-  }
-
-  // Function to find and click the Next/Continue button
-  function clickNextButton() {
-    if (!settings.enabled || hasClicked) return false;
-    const button = findClickableNextButton();
-
-    if (isReadyToClick(button)) {
-      hasClicked = true;
-      console.log('Chess.com Auto-Next: Clicking button after', settings.delay, 'ms');
-      
-      setTimeout(() => {
-        // Re-resolve at click time because Chess.com frequently re-renders this node.
-        const liveButton = findClickableNextButton();
-        if (!isReadyToClick(liveButton)) {
-          hasClicked = false;
-          return;
-        }
-        liveButton.click();
-        liveButton.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-        // Reset after a delay to allow for next puzzle
-        setTimeout(() => { hasClicked = false; }, CLICK_LOCK_MS);
-      }, settings.delay);
-      
-      return true;
-    }
-    
-    return false;
-  }
-
-  const completionIndicators = [
-    '.puzzle-complete',
-    '.puzzle-success',
-    '[class*="result"]',
-    '[class*="success"]',
-    '[class*="complete"]',
-    '[class*="corret"]',
-    'button[aria-label="Next"]',
-    'button[data-cy="next-move-arrow"]:not([disabled])',
-    'button[aria-label*="Próximo"]',
-    'button[aria-label*="Proximo"]',
-    'button[aria-label*="Continue"]',
-    'button[aria-label*="Continuar"]'
-  ];
-
-  function hasCompletionIndicator() {
-    for (const indicator of completionIndicators) {
-      if (document.querySelector(indicator)) return true;
-    }
-    return false;
-  }
-
-  let clickRetryTimer = null;
-  let clickRetryAttempts = 0;
-  const CLICK_RETRY_INTERVAL_MS = 150;
-  const CLICK_RETRY_MAX_ATTEMPTS = 30;
-  const CLICK_LOCK_MS = 900;
-
-  function stopClickRetry() {
-    if (clickRetryTimer) {
-      clearInterval(clickRetryTimer);
-      clickRetryTimer = null;
-    }
-    clickRetryAttempts = 0;
-  }
-
-  function startClickRetry() {
-    if (clickRetryTimer || !settings.enabled) return;
-
-    clickRetryAttempts = 0;
-    clickRetryTimer = setInterval(() => {
-      clickRetryAttempts += 1;
-      const clicked = clickNextButton();
-
-      if (clicked || !hasCompletionIndicator() || clickRetryAttempts >= CLICK_RETRY_MAX_ATTEMPTS) {
-        stopClickRetry();
-      }
-    }, CLICK_RETRY_INTERVAL_MS);
-  }
-
-  // Watch for puzzle completion indicators
-  const observer = new MutationObserver((mutations) => {
-    // Look for success/completion messages or result screens
-    if (hasCompletionIndicator()) {
-      const clicked = clickNextButton();
-      if (!clicked) startClickRetry();
-    }
-
-    // Check if any mutation added a "Next" button
-    for (const mutation of mutations) {
-      if (mutation.addedNodes.length > 0) {
-        mutation.addedNodes.forEach(node => {
-          if (node.nodeType === 1) { // Element node
-            const text = normalizeText(node.textContent);
-            if (
-              text.includes('next') ||
-              text.includes('continue') ||
-              text.includes('proximo') ||
-              text.includes('continuar') ||
-              text.includes('correto') ||
-              text.includes('correct')
-            ) {
-              const clicked = clickNextButton();
-              if (!clicked) startClickRetry();
-            }
-          }
-        });
-      }
-    }
-  });
-
-  // Start observing the document
+  const observer = new MutationObserver(scheduleCheck);
   observer.observe(document.body, {
     childList: true,
     subtree: true,
     attributes: true,
-    attributeFilter: ['disabled', 'aria-disabled', 'class', 'style']
+    attributeFilter: ['data-variant', 'aria-label', 'data-disabled', 'disabled']
   });
 
-  // Watch for settings menus to appear and inject toggle
-  const settingsObserver = new MutationObserver(() => {
-    if (!document.getElementById('chess-auto-next-toggle')) {
-      injectToggleIntoSettings();
-    }
+  const themeObserver = new MutationObserver(() => {
+    const footer = document.querySelector('.rated-sidebar-footer-component');
+    if (footer) syncThemeFromSidebar(footer);
   });
+  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme'] });
+  themeObserver.observe(document.body, { attributes: true, attributeFilter: ['class', 'data-theme'] });
 
-
-  // Start observing for settings button to appear
-  if (document.body) {
-    // Try initial injection with multiple attempts
-    const tryInject = () => {
-      if (!document.getElementById('chess-auto-next-toggle')) {
-        injectToggleIntoSettings();
-      }
-    };
-    
-    setTimeout(tryInject, 500);
-    setTimeout(tryInject, 1500);
-    setTimeout(tryInject, 3000);
-    
-    // Watch for dynamically added buttons
-    settingsObserver.observe(document.body, {
-      childList: true,
-      subtree: true
-    });
-  } else {
-    const bodyObserver = new MutationObserver(() => {
-      if (document.body) {
-        setTimeout(() => {
-          if (!document.getElementById('chess-auto-next-toggle')) {
-            injectToggleIntoSettings();
-          }
-        }, 500);
-        settingsObserver.observe(document.body, {
-          childList: true,
-          subtree: true
-        });
-        bodyObserver.disconnect();
-      }
-    });
-    bodyObserver.observe(document.documentElement, { childList: true });
-  }
-
-  console.log('Chess.com Auto-Next extension loaded');
+  window.setTimeout(injectFooterControls, 300);
+  window.setTimeout(injectFooterControls, 1000);
+  window.setTimeout(injectFooterControls, 2000);
 })();

@@ -1,55 +1,108 @@
-// Chess.com Auto-Next Popup Script
 document.addEventListener('DOMContentLoaded', () => {
-  const delayInput = document.getElementById('delayInput');
-  const saveBtn = document.getElementById('saveBtn');
-  const status = document.getElementById('status');
+  const autoNextButton = document.getElementById('autoNextButton');
+  const autoRetryButton = document.getElementById('autoRetryButton');
+  const autoNextDelayInput = document.getElementById('autoNextDelayInput');
+  const autoRetryDelayInput = document.getElementById('autoRetryDelayInput');
+  const autoNextDelayWrap = document.getElementById('autoNextDelayWrap');
+  const autoRetryDelayWrap = document.getElementById('autoRetryDelayWrap');
 
-  // Load current settings and default to 5ms delay
-  chrome.storage.sync.get(['delay'], (result) => {
-    // Always default to 5ms if not set or if it's the old default (800)
-    let delay = result.delay;
-    if (delay === undefined || delay === 800) {
-      delay = 5;
-      // Save the new default
-      chrome.storage.sync.set({ delay: 5 }, () => {
-        console.log('Default delay set to 5ms');
-      });
-    }
-    
-    delayInput.value = delay;
+  const settings = {
+    autoNext: true,
+    autoRetry: true,
+    autoNextDelay: 50,
+    autoRetryDelay: 150
+  };
+
+  let settingsLoaded = false;
+  let saveTimer = null;
+
+  extensionStorage.get(['autoNext', 'enabled', 'autoRetry', 'autoNextDelay', 'autoRetryDelay'], result => {
+    settings.autoNext = typeof result.autoNext === 'boolean'
+      ? result.autoNext
+      : typeof result.enabled === 'boolean'
+        ? result.enabled
+        : true;
+    settings.autoRetry = typeof result.autoRetry === 'boolean'
+      ? result.autoRetry
+      : true;
+    settings.autoNextDelay = normalizeDelay(result.autoNextDelay, 50);
+    settings.autoRetryDelay = normalizeDelay(result.autoRetryDelay, 150);
+    settingsLoaded = true;
+    autoNextDelayInput.value = settings.autoNextDelay;
+    autoRetryDelayInput.value = settings.autoRetryDelay;
+    setControlsDisabled(false);
+    renderSettings();
   });
 
-  // Save settings
-  saveBtn.addEventListener('click', () => {
-    const delay = parseInt(delayInput.value, 10);
-
-    // Validate delay
-    if (isNaN(delay) || delay < 0) {
-      showStatus('⚠️ Please enter a valid delay value', false);
-      return;
-    }
-
-    // Save to storage
-    chrome.storage.sync.set({ delay }, () => {
-      showStatus('✅ Settings saved successfully!', true);
-      console.log('Settings saved:', { delay });
-    });
+  autoNextButton.addEventListener('click', () => {
+    if (!settingsLoaded) return;
+    settings.autoNext = !settings.autoNext;
+    renderSettings();
+    extensionStorage.set({ autoNext: settings.autoNext });
   });
 
-  // Show status message
-  function showStatus(message, isSuccess) {
-    status.textContent = message;
-    status.className = 'status show' + (isSuccess ? ' success' : '');
-    
-    setTimeout(() => {
-      status.classList.remove('show');
-    }, 2500);
+  autoRetryButton.addEventListener('click', () => {
+    if (!settingsLoaded) return;
+    settings.autoRetry = !settings.autoRetry;
+    renderSettings();
+    extensionStorage.set({ autoRetry: settings.autoRetry });
+  });
+
+  bindDelayInput(autoNextDelayInput, autoNextDelayWrap, 'autoNextDelay');
+  bindDelayInput(autoRetryDelayInput, autoRetryDelayWrap, 'autoRetryDelay');
+
+  function normalizeDelay(value, fallback) {
+    return Number.isInteger(value) && value >= 0 && value <= 10000 ? value : fallback;
   }
 
-  // Allow Enter key to save
-  delayInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') {
-      saveBtn.click();
-    }
-  });
+  function setControlsDisabled(disabled) {
+    autoNextButton.disabled = disabled;
+    autoRetryButton.disabled = disabled;
+    autoNextDelayInput.disabled = disabled;
+    autoRetryDelayInput.disabled = disabled;
+  }
+
+  function renderSettings() {
+    autoNextButton.setAttribute('aria-checked', String(settings.autoNext));
+    autoRetryButton.setAttribute('aria-checked', String(settings.autoRetry));
+  }
+
+  function bindDelayInput(input, wrap, key) {
+    input.addEventListener('input', () => {
+      if (!settingsLoaded) return;
+      const value = Number(input.value);
+      const valid = input.value !== '' && Number.isInteger(value) && value >= 0 && value <= 10000;
+      wrap.classList.toggle('invalid', !valid);
+      input.setAttribute('aria-invalid', String(!valid));
+      if (!valid) return;
+
+      settings[key] = value;
+      queueSave();
+    });
+
+    input.addEventListener('change', flushSave);
+    input.addEventListener('blur', flushSave);
+  }
+
+  function queueSave() {
+    if (saveTimer !== null) window.clearTimeout(saveTimer);
+    saveTimer = window.setTimeout(saveDelays, 250);
+  }
+
+  function flushSave() {
+    if (saveTimer === null) return;
+    window.clearTimeout(saveTimer);
+    saveTimer = null;
+    saveDelays();
+  }
+
+  function saveDelays() {
+    saveTimer = null;
+    extensionStorage.set({
+      autoNextDelay: settings.autoNextDelay,
+      autoRetryDelay: settings.autoRetryDelay
+    });
+  }
+
+  window.addEventListener('pagehide', flushSave);
 });
