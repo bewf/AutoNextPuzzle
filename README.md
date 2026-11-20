@@ -1,9 +1,11 @@
-<img align="right" src="icons/icon-128.png" width="80">
+<p align="center">
+  <img src="assets/banner.png" alt="AutoNextPuzzle" width="720">
+</p>
 
-# AutoNextPuzzle
-
-[![Chrome](https://img.shields.io/badge/Chrome-Coming%20Soon-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white)](https://github.com/bewf/AutoNextPuzzle/tree/chromium)
-[![Firefox](https://img.shields.io/badge/Firefox-Install-FF7139?style=for-the-badge&logo=firefox&logoColor=white)](https://addons.mozilla.org/firefox/)
+<p align="center">
+  <a href="https://addons.mozilla.org/firefox/addon/auto-next-puzzle/"><img src="https://img.shields.io/badge/Firefox-Add--ons-FF7139?style=for-the-badge&logo=firefox&logoColor=white" alt="Get it on Firefox Add-ons"></a>
+  <a href="https://github.com/bewf/AutoNextPuzzle/tree/chromium"><img src="https://img.shields.io/badge/Chrome-Web%20Store-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Get it on the Chrome Web Store"></a>
+</p>
 
 ## What does this do?
 
@@ -11,7 +13,10 @@ AutoNextPuzzle advances to the next Chess.com puzzle after you solve it, or retr
 
 You can toggle **Auto Next** and **Auto Retry** right above the Hint button on Chess.com, or click the extension icon to set custom delays (50 ms for Next and 150 ms for Retry by default).
 
-<img src="assets/preview.png" alt="AutoNextPuzzle controls on Chess.com" width="420">
+<p>
+  <img src="assets/screenshot-1.png" alt="AutoNextPuzzle controls on Chess.com" width="49%">
+  <img src="assets/screenshot-2.png" alt="Close-up of the Auto Next, Auto Retry and Hint buttons" width="49%">
+</p>
 
 ## Modes
 
@@ -26,8 +31,8 @@ You can toggle **Auto Next** and **Auto Retry** right above the Hint button on C
 
 Pick your browser:
 
-- **Firefox** → [Firefox Add-ons](https://addons.mozilla.org/firefox/) *(or load `manifest.json` via `about:debugging#/runtime/this-firefox`)*
-- **Chrome / Brave** → [Chromium branch](https://github.com/bewf/AutoNextPuzzle/tree/chromium) *(load unpacked via `chrome://extensions` or `brave://extensions`)*
+- **Firefox** → [Firefox Add-ons](https://addons.mozilla.org/firefox/addon/auto-next-puzzle/) *(works on Firefox for Android too, or load `manifest.json` via `about:debugging#/runtime/this-firefox`)*
+- **Chrome / Brave** → [Chrome Web Store](https://github.com/bewf/AutoNextPuzzle/tree/chromium) *(or load the [Chromium branch](https://github.com/bewf/AutoNextPuzzle/tree/chromium) unpacked via `chrome://extensions` or `brave://extensions`)*
 
 ## Credits
 
