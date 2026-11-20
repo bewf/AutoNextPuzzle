@@ -11,6 +11,8 @@ AutoNextPuzzle advances to the next Chess.com puzzle after you solve it, or retr
 
 You can toggle **Auto Next** and **Auto Retry** right above the Hint button on Chess.com, or click the extension icon to set custom delays (50 ms for Next and 150 ms for Retry by default).
 
+<img src="assets/preview.png" alt="AutoNextPuzzle controls on Chess.com" width="420">
+
 ## Modes
 
 | Auto Next | Auto Retry | What it does |
