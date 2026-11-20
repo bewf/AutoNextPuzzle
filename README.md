@@ -4,6 +4,7 @@
 
 <p align="center">
   <a href="https://addons.mozilla.org/firefox/addon/auto-next-puzzle/"><img src="https://img.shields.io/badge/Firefox-Add--ons-FF7139?style=for-the-badge&logo=firefox&logoColor=white" alt="Get it on Firefox Add-ons"></a>
+  <a href="https://chromewebstore.google.com/detail/kkjonhiflkkmdngelljdijddhcnnnelf"><img src="https://img.shields.io/badge/Chrome-Web%20Store-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Get it on the Chrome Web Store"></a>
 </p>
 
 ## What does this do?
